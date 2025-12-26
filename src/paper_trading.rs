@@ -179,27 +179,29 @@ impl PaperTrader {
 
     /// Simulate execution of an arbitrage opportunity
     pub async fn simulate_execution(&self, market: &TrackedMarket) -> SimulatedResult {
-        let mut rng = rand::thread_rng();
+        // Generate all random values before any await to avoid Send issues
+        let (delay_ms, fill_rate, slippage, exposure_loss) = {
+            let mut rng = rand::thread_rng();
+            let delay = rng.gen_range(self.config.exec_delay_min_ms..=self.config.exec_delay_max_ms);
+            let fill = rng.gen_range(self.config.fill_rate_min..=self.config.fill_rate_max);
+            let slip = rng.gen_range(self.config.slippage_min_cents..=self.config.slippage_max_cents);
+            let loss = rng.gen_range(1i16..=5i16);
+            (delay, fill, slip, loss)
+        };
 
         // Simulate execution delay
-        let delay_ms = rng.gen_range(self.config.exec_delay_min_ms..=self.config.exec_delay_max_ms);
         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 
         let outcome_count = market.outcomes.len();
         let expected_profit = market.potential_profit_cents();
 
         // Simulate fill rate for each outcome
-        let fill_rate = rng.gen_range(self.config.fill_rate_min..=self.config.fill_rate_max);
         let filled_outcomes = ((outcome_count as f64) * fill_rate).round() as usize;
-
-        // Simulate slippage
-        let slippage = rng.gen_range(self.config.slippage_min_cents..=self.config.slippage_max_cents);
 
         // Calculate actual profit
         let (success, actual_profit, reason) = if filled_outcomes < outcome_count {
             // Partial fill - not all outcomes filled
             // In reality, this creates exposure. Simulate closing at a loss.
-            let exposure_loss = rng.gen_range(1..=5) as i16; // 1-5 cents loss
             (
                 false,
                 -exposure_loss,

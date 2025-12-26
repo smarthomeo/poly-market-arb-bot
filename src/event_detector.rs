@@ -151,7 +151,8 @@ impl EventDetector {
 
             // Trim old events
             if events.len() > self.max_events {
-                events.drain(0..events.len() - self.max_events);
+                let drain_count = events.len() - self.max_events;
+                events.drain(0..drain_count);
             }
         }
 

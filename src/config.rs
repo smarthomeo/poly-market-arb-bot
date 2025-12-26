@@ -104,7 +104,7 @@ pub const MARKET_SCAN_INTERVAL_SECS: u64 = 300; // 5 minutes
 // =============================================================================
 
 /// Market categories to enable
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MarketCategory {
     Sports,
     Politics,
