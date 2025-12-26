@@ -151,7 +151,9 @@ impl MarketScanner {
 
     /// Scan Gamma API for markets matching our criteria
     pub async fn scan_markets(&self) -> Result<usize> {
-        info!("[SCANNER] Fetching markets from Gamma API...");
+        // Log current state BEFORE scan
+        let pre_count = self.markets.read().await.len();
+        info!("[SCANNER] Fetching markets from Gamma API... (pre-scan count: {})", pre_count);
 
         let url = format!(
             "{}/markets?active=true&closed=false&limit=1000",
@@ -179,9 +181,10 @@ impl MarketScanner {
         let mut added = 0;
         let mut updated = 0;
         let mut skipped = 0;
+        let mut skip_reasons: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
 
         for market in markets {
-            match self.process_market(market) {
+            match self.process_market_with_reason(&market) {
                 Ok(Some(tracked_market)) => {
                     let condition_id = tracked_market.condition_id.clone();
                     if tracked.contains_key(&condition_id) {
@@ -194,11 +197,19 @@ impl MarketScanner {
                 Ok(None) => {
                     skipped += 1;
                 }
-                Err(e) => {
-                    debug!("[SCANNER] Skipping market: {}", e);
+                Err(reason) => {
+                    *skip_reasons.entry(reason).or_insert(0) += 1;
                     skipped += 1;
                 }
             }
+        }
+
+        // Log skip reasons if any
+        if !skip_reasons.is_empty() {
+            let reasons: Vec<String> = skip_reasons.iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect();
+            info!("[SCANNER] Skip reasons: {}", reasons.join(", "));
         }
 
         info!(
@@ -210,6 +221,111 @@ impl MarketScanner {
         );
 
         Ok(tracked.len())
+    }
+
+    /// Process market and return skip reason if filtered
+    fn process_market_with_reason(&self, market: &GammaMarket) -> Result<Option<TrackedMarket>, &'static str> {
+        let condition_id = market.condition_id.as_ref().ok_or("no_condition_id")?;
+        let question = market.question.as_ref().ok_or("no_question")?;
+        let slug = market.slug.clone().unwrap_or_default();
+
+        if should_skip_market(question) {
+            return Err("keyword_filter");
+        }
+
+        let outcomes_str = market.outcomes.as_ref().ok_or("no_outcomes")?;
+        let outcome_names: Vec<String> =
+            serde_json::from_str(outcomes_str).map_err(|_| "outcomes_parse_fail")?;
+
+        if outcome_names.is_empty() {
+            return Err("empty_outcomes");
+        }
+        if outcome_names.len() < MIN_OUTCOMES {
+            return Err("too_few_outcomes");
+        }
+        if outcome_names.len() > MAX_OUTCOMES {
+            return Err("too_many_outcomes");
+        }
+
+        let token_ids_str = market.clob_token_ids.as_ref().map(|s| s.as_str()).unwrap_or("[]");
+        let token_ids: Vec<String> =
+            serde_json::from_str(token_ids_str).map_err(|_| "token_parse_fail")?;
+
+        if token_ids.len() != outcome_names.len() {
+            return Err("token_outcome_mismatch");
+        }
+
+        let prices_str = market.outcome_prices.as_ref().map(|s| s.as_str()).unwrap_or("[]");
+        let prices: Vec<String> =
+            serde_json::from_str(prices_str).unwrap_or_else(|_| Vec::new());
+
+        let mut outcomes = Vec::with_capacity(outcome_names.len());
+        for (i, name) in outcome_names.into_iter().enumerate() {
+            let ask_price: f64 = prices.get(i).and_then(|p| p.parse().ok()).unwrap_or(0.0);
+            outcomes.push(Outcome {
+                name,
+                token_id: token_ids.get(i).cloned().unwrap_or_default(),
+                ask_price,
+                ask_size: 0.0,
+                bid_price: 0.0,
+            });
+        }
+
+        let volume_usd: f64 = market.volume.as_ref().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        if volume_usd < MIN_VOLUME_USD {
+            return Err("low_volume");
+        }
+
+        let liquidity_usd: f64 = market.liquidity.as_ref().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+
+        let created_at = market.start_date.as_ref()
+            .and_then(|d| DateTime::parse_from_rfc3339(d).ok())
+            .map(|d| d.with_timezone(&Utc));
+
+        let end_date = market.end_date.as_ref()
+            .and_then(|d| DateTime::parse_from_rfc3339(d).ok())
+            .map(|d| d.with_timezone(&Utc));
+
+        if let Some(end) = end_date {
+            let days_until_expiry = (end - Utc::now()).num_days();
+            if days_until_expiry < 0 {
+                return Err("expired");
+            }
+            if days_until_expiry > MAX_DAYS_TO_EXPIRY as i64 {
+                return Err("too_far_expiry");
+            }
+        }
+
+        let is_new = created_at
+            .map(|c| {
+                let hours_old = (Utc::now() - c).num_hours();
+                hours_old >= 0 && hours_old < NEW_MARKET_HOURS as i64
+            })
+            .unwrap_or(false);
+
+        let tags = market.tags.clone().unwrap_or_default();
+        let category = MarketCategory::from_tags(&tags);
+
+        if !category.is_enabled() {
+            return Err("category_disabled");
+        }
+
+        Ok(Some(TrackedMarket {
+            condition_id: condition_id.clone(),
+            question: question.clone(),
+            slug,
+            outcomes,
+            volume_usd,
+            liquidity_usd,
+            created_at,
+            end_date,
+            category,
+            active: market.active.unwrap_or(false),
+            closed: market.closed.unwrap_or(true),
+            is_new,
+            last_updated: Utc::now(),
+            tags,
+        }))
     }
 
     /// Process a single market from Gamma API
