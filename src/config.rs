@@ -53,7 +53,7 @@ pub const ARB_THRESHOLD_MULTI: f64 = 0.97;
 // =============================================================================
 
 /// Minimum market volume in USD to consider
-pub const MIN_VOLUME_USD: f64 = 50_000.0;
+pub const MIN_VOLUME_USD: f64 = 5_000.0;
 
 /// Minimum number of outcomes (2 = binary)
 pub const MIN_OUTCOMES: usize = 2;
@@ -62,7 +62,7 @@ pub const MIN_OUTCOMES: usize = 2;
 pub const MAX_OUTCOMES: usize = 8;
 
 /// Maximum days until expiry (skip long-term markets)
-pub const MAX_DAYS_TO_EXPIRY: u32 = 30;
+pub const MAX_DAYS_TO_EXPIRY: u32 = 180;
 
 /// Market considered "new" if created within this many hours
 pub const NEW_MARKET_HOURS: u64 = 24;
@@ -118,13 +118,7 @@ pub enum MarketCategory {
 impl MarketCategory {
     /// Check if this category is enabled for trading
     pub fn is_enabled(&self) -> bool {
-        matches!(
-            self,
-            MarketCategory::Sports
-                | MarketCategory::Politics
-                | MarketCategory::Crypto
-                | MarketCategory::Entertainment
-        )
+        true // Enable all categories
     }
 
     /// Parse category from Polymarket tags/metadata
@@ -200,14 +194,6 @@ impl MarketCategory {
 pub const DISABLED_KEYWORDS: &[&str] = &[
     "weather",
     "temperature",
-    "long-term",
-    "2026",
-    "2027",
-    "2028",
-    "2029",
-    "2030",
-    "local",
-    "municipal",
 ];
 
 /// Check if a market question should be skipped based on keywords
